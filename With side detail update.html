@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Istanbul – Abandoned Vessels</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --hud: rgba(235,235,235,0.92); --hud-dim: rgba(235,235,235,0.55); --line: rgba(235,235,235,0.25);
+          --panel-w: 35%; --ease: cubic-bezier(.6,0,.2,1); }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; color: var(--hud); }
+
+  /* Map stage: full width, shrinks to the left when a point is open */
+  #stage { position: absolute; top: 0; bottom: 0; left: 0; right: 0; transition: right .55s var(--ease); overflow: hidden; }
+  body.open #stage { right: var(--panel-w); }
+  #map { position: absolute; inset: 0; background: #050505; }
+
+  .mono-tiles { filter: grayscale(1) contrast(1.45) brightness(0.82); }
+
+  #grain { position: absolute; inset: 0; pointer-events: none; z-index: 400;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 3px);
+    box-shadow: inset 0 0 180px rgba(0,0,0,0.85); }
+
+  /* HUD */
+  #hud { position: absolute; inset: 0; pointer-events: none; z-index: 500;
+    font-size: 13px; letter-spacing: 0.06em; text-shadow: 0 0 3px #000; }
+  .tl, .tr, .bl, .br, .tc { position: absolute; line-height: 1.45; }
+  .tl { top: 22px; left: 26px; }
+  .tr { top: 22px; right: 26px; text-align: right; }
+  .bl { bottom: 26px; left: 26px; }
+  .br { bottom: 26px; right: 26px; text-align: right; }
+  .tc { top: 22px; left: 50%; transform: translateX(-50%); text-align: center; }
+  .tag { display: inline-block; background: var(--hud); color: #000; padding: 0 6px; font-weight: 500; }
+  .dim { color: var(--hud-dim); }
+
+  .cross { position: absolute; left: 50%; top: 50%; width: 460px; height: 470px; transform: translate(-50%, -50%); }
+  .cross::before, .cross::after { content: ""; position: absolute; background: var(--hud); }
+  .cross::before { left: 50%; top: 0; bottom: 0; width: 1px; transform: translateX(-50%);
+    -webkit-mask: linear-gradient(#000 0 calc(50% - 22px), transparent calc(50% - 22px) calc(50% + 22px), #000 calc(50% + 22px));
+            mask: linear-gradient(#000 0 calc(50% - 22px), transparent calc(50% - 22px) calc(50% + 22px), #000 calc(50% + 22px)); }
+  .cross::after { top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%);
+    -webkit-mask: linear-gradient(90deg, #000 0 calc(50% - 22px), transparent calc(50% - 22px) calc(50% + 22px), #000 calc(50% + 22px));
+            mask: linear-gradient(90deg, #000 0 calc(50% - 22px), transparent calc(50% - 22px) calc(50% + 22px), #000 calc(50% + 22px)); }
+
+  .box { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); transition: width .55s var(--ease), height .55s var(--ease); }
+  .box i { position: absolute; width: 18px; height: 18px; border: 0 solid var(--hud); }
+  .box i:nth-child(1) { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; }
+  .box i:nth-child(2) { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; }
+  .box i:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; }
+  .box i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+  .box.inner { width: 160px; height: 180px; }
+  body.open .box.inner { width: 90px; height: 90px; }
+  .box.outer { width: 62%; height: 52%; }
+
+  .ladder { position: absolute; left: 26px; top: 50%; transform: translateY(-50%); line-height: 1.15; }
+  .tape { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); text-align: center; }
+  .ticks { letter-spacing: 0.25em; }
+  .north { position: absolute; top: 92px; left: 30px; font-size: 12px; }
+
+  .leaflet-control-zoom { border: 1px solid var(--hud-dim) !important; border-radius: 0 !important; margin: 0 26px 110px 0 !important; }
+  .leaflet-control-zoom a { background: rgba(0,0,0,0.6) !important; color: var(--hud) !important;
+    border-radius: 0 !important; border-bottom: 1px solid var(--hud-dim) !important;
+    font-family: "IBM Plex Mono", monospace; width: 34px !important; height: 34px !important; line-height: 32px !important; }
+  .leaflet-control-zoom a:hover { background: var(--hud) !important; color: #000 !important; }
+  .leaflet-control-attribution { background: rgba(0,0,0,0.55) !important; color: var(--hud-dim) !important;
+    font-family: "IBM Plex Mono", monospace; font-size: 9px; }
+  .leaflet-control-attribution a { color: var(--hud-dim) !important; }
+
+  /* Point markers */
+  .vessel { width: 14px; height: 14px; border: 1.5px solid #fff; transform: rotate(45deg);
+    box-shadow: 0 0 6px #000; cursor: pointer; transition: background .2s; }
+  .vessel:hover, .vessel.active { background: #fff; }
+
+  /* Side panel (yellow box) */
+  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: var(--panel-w); background: #000;
+    border-left: 1px solid var(--line); transform: translateX(100%); transition: transform .55s var(--ease);
+    overflow-y: auto; box-sizing: border-box; padding: 22px 26px 30px; font-size: 13px; letter-spacing: 0.04em; z-index: 600; }
+  body.open #panel { transform: translateX(0); }
+  .p-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; }
+  .p-id { color: var(--hud-dim); }
+  .p-title { font-size: 18px; margin-top: 4px; letter-spacing: 0.02em; }
+  #close { background: none; border: 1px solid var(--hud-dim); color: var(--hud); font: inherit;
+    width: 32px; height: 32px; cursor: pointer; flex: none; }
+  #close:hover { background: var(--hud); color: #000; }
+
+  .p-section { color: var(--hud-dim); margin: 22px 0 8px; display: flex; gap: 10px; align-items: center; }
+  .p-section::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .gallery figure { position: relative; margin: 0; aspect-ratio: 1.45; background: #111; overflow: hidden; cursor: zoom-in; }
+  .gallery figure.wide { grid-column: span 2; }
+  .gallery img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .gallery figcaption { position: absolute; top: 8px; left: 10px; font-size: 12px; font-weight: 500; color: #fff;
+    text-shadow: 0 0 4px #000, 0 0 2px #000; }
+  .gallery .empty { display: flex; align-items: center; justify-content: center; color: var(--hud-dim); font-size: 11px;
+    border: 1px dashed var(--line); background: none; cursor: default; }
+
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 9px 18px; margin: 0; }
+  dl.facts dt { color: var(--hud-dim); }
+  dl.facts dd { margin: 0; }
+  .p-note { line-height: 1.55; color: var(--hud); }
+
+  /* Full-size image viewer */
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.92); display: none; align-items: center; justify-content: center; z-index: 1000; cursor: zoom-out; }
+  #lightbox.show { display: flex; }
+  #lightbox img { max-width: 94vw; max-height: 90vh; }
+  #lightbox span { position: absolute; top: 18px; left: 22px; font-size: 13px; }
+
+  @media (max-width: 800px) {
+    :root { --panel-w: 100%; }
+    body.open #stage { right: 0; bottom: 55%; }
+    #panel { top: 45%; width: 100%; border-left: 0; border-top: 1px solid var(--line); transform: translateY(100%); }
+    body.open #panel { transform: translateY(0); }
+    #hud { font-size: 10px; }
+    .cross { width: 260px; height: 280px; }
+    .ladder, .tape { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="map"></div>
+  <div id="grain"></div>
+  <div id="hud">
+    <div class="tl"><span id="clock">--:--:--</span>&nbsp;&nbsp;AUTO&nbsp;&nbsp;&nbsp;VIC<br>UTC+3.0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;MAN</div>
+    <div class="tc"><span class="tag">EON</span><br>DL:LL</div>
+    <div class="tr"><span id="c-lat">N --°--.---'</span><br><span id="c-lon">E ---°--.---'</span><br><span id="c-alt">-- HAT</span></div>
+    <div class="north">N<br>↑</div>
+    <div class="ladder dim">01-<br>&nbsp;-<br>&nbsp;-<br>&nbsp;-<br>00-<br>&nbsp;-&lt;0<br>&nbsp;-<br>&nbsp;-<br>-01-<br>&nbsp;-<br>&nbsp;-<br>&nbsp;-<br>-02-</div>
+    <div class="box outer"><i></i><i></i><i></i><i></i></div>
+    <div class="cross"></div>
+    <div class="box inner"><i></i><i></i><i></i><i></i></div>
+    <div class="bl">ACFT<br><span id="m-lat">N --°--.---'</span><br><span id="m-lon">E ---°--.---'</span><br><span class="dim">ZOOM <span id="zoom">--</span></span></div>
+    <div class="tape"><span class="ticks dim">35 ' 00 ' 01 ' 02 ' 03</span><br>↑<br>000°T</div>
+    <div class="br"><span id="tgt-label">TGT</span><br><span id="t-lat">N --°--.---'</span><br><span id="t-lon">E ---°--.---'</span><br><span class="dim">SCALE <span id="scale">--</span></span></div>
+  </div>
+</div>
+
+<aside id="panel" aria-hidden="true">
+  <div class="p-head">
+    <div><div class="p-id" id="p-id">TGT --</div><div class="p-title" id="p-title">—</div></div>
+    <button id="close" aria-label="Close">×</button>
+  </div>
+
+  <div class="p-section">DETECTION</div>
+  <div class="gallery" id="p-gallery"></div>
+
+  <div class="p-section">DETAILS</div>
+  <dl class="facts">
+    <dt>LOCATION</dt><dd id="p-location">—</dd>
+    <dt>COORDS</dt><dd id="p-coords">—</dd>
+    <dt>VESSEL</dt><dd id="p-vessel">—</dd>
+    <dt>MATERIAL</dt><dd id="p-material">—</dd>
+    <dt>ON SITE</dt><dd id="p-duration">—</dd>
+  </dl>
+
+  <div id="p-notes-wrap" style="display:none">
+    <div class="p-section">NOTES</div>
+    <div class="p-note" id="p-notes"></div>
+  </div>
+</aside>
+
+<div id="lightbox"><span id="lb-cap"></span><img id="lb-img" alt=""></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const bounds = L.latLngBounds([40.70, 27.90], [41.50, 30.10]);
+  const HOME = { center: [41.04, 29.00], zoom: 10 };
+  const POINT_ZOOM = 17;
+
+  const map = L.map('map', {
+    center: HOME.center, zoom: HOME.zoom, minZoom: 9, maxZoom: 18,
+    maxBounds: bounds.pad(0.15), maxBoundsViscosity: 0.8, zoomControl: false
+  });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 18, className: 'mono-tiles', attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics'
+  }).addTo(map);
+
+  // ---------- HUD ----------
+  const $ = id => document.getElementById(id);
+  function dm(v, pos, neg, degPad) {
+    const h = v >= 0 ? pos : neg; v = Math.abs(v);
+    const d = Math.floor(v), m = (v - d) * 60;
+    return `${h} ${String(d).padStart(degPad, '0')}°${m.toFixed(3).padStart(6, '0')}'`;
+  }
+  function updateView() {
+    const c = map.getCenter(), size = map.getSize();
+    $('c-lat').textContent = $('t-lat').textContent = dm(c.lat, 'N', 'S', 2);
+    $('c-lon').textContent = $('t-lon').textContent = dm(c.lng, 'E', 'W', 3);
+    $('zoom').textContent = map.getZoom();
+    const mpp = 40075016.686 * Math.cos(c.lat * Math.PI / 180) / Math.pow(2, map.getZoom() + 8);
+    $('c-alt').textContent = Math.round(mpp * size.y * 3.28084).toLocaleString('en-US') + ' HAT';
+    const w = mpp * size.x;
+    $('scale').textContent = w >= 1000 ? (w / 1000).toFixed(1) + ' KM' : Math.round(w) + ' M';
+  }
+  map.on('move zoom resize', updateView);
+  map.on('mousemove', e => {
+    $('m-lat').textContent = dm(e.latlng.lat, 'N', 'S', 2);
+    $('m-lon').textContent = dm(e.latlng.lng, 'E', 'W', 3);
+  });
+  updateView();
+  setInterval(() => { $('clock').textContent = new Date(Date.now() + 3 * 3600e3).toISOString().substring(11, 19); }, 1000);
+
+  // ---------- Points ----------
+  /*
+    addPoints(geojson) takes a GeoJSON FeatureCollection of points. Properties per point
+    (all optional except coordinates):
+      id          "01"
+      name        "Kumkapı fishing harbour – hull 3"
+      location    "Kumkapı fishing shelter, Fatih"
+      vessel      "Wooden fishing boat, ~12 m"
+      material    "Timber hull, steel fittings, diesel engine"
+      duration    "Since 2013 (12+ years)"
+      notes       free text
+      images      [ { "src": "images/01_2010-03.jpg", "caption": "2010-03 raw" }, ... ]
+  */
+  const icon = () => L.divIcon({ className: '', html: '<div class="vessel"></div>', iconSize: [14, 14] });
+  const points = L.layerGroup().addTo(map);
+  let activeMarker = null;
+
+  window.addPoints = function (geojson) {
+    L.geoJSON(geojson, {
+      pointToLayer: (f, latlng) => L.marker(latlng, { icon: icon() }),
+      onEachFeature: (f, layer) => layer.on('click', () => openPoint(f, layer))
+    }).addTo(points);
+  };
+
+  function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function openPoint(f, marker) {
+    const p = f.properties || {};
+    const [lng, lat] = f.geometry.coordinates;
+
+    $('p-id').textContent = 'TGT ' + (p.id || '--');
+    $('p-title').textContent = p.name || 'Unnamed vessel';
+    $('p-location').textContent = p.location || '—';
+    $('p-coords').textContent = dm(lat, 'N', 'S', 2) + '  ' + dm(lng, 'E', 'W', 3);
+    $('p-vessel').textContent = p.vessel || '—';
+    $('p-material').textContent = p.material || '—';
+    $('p-duration').textContent = p.duration || '—';
+    $('p-notes-wrap').style.display = p.notes ? '' : 'none';
+    $('p-notes').textContent = p.notes || '';
+    $('tgt-label').textContent = 'TGT ' + (p.id || '');
+
+    const imgs = p.images || [];
+    $('p-gallery').innerHTML = imgs.length
+      ? imgs.map((im, i) => `<figure class="${imgs.length % 2 && i === imgs.length - 1 ? 'wide' : ''}" data-src="${esc(im.src)}" data-cap="${esc(im.caption)}">
+           <img src="${esc(im.src)}" alt="${esc(im.caption)}" loading="lazy"><figcaption>${esc(im.caption)}</figcaption></figure>`).join('')
+      : '<figure class="empty wide">NO DETECTION IMAGES YET</figure>';
+
+    if (activeMarker) activeMarker.getElement()?.firstChild?.classList.remove('active');
+    activeMarker = marker;
+    marker.getElement()?.firstChild?.classList.add('active');
+
+    const wasOpen = document.body.classList.contains('open');
+    document.body.classList.add('open');
+    $('panel').setAttribute('aria-hidden', 'false');
+    // Let the map finish shrinking into the left area, then fly to the point
+    setTimeout(() => { map.invalidateSize(); map.flyTo([lat, lng], POINT_ZOOM, { duration: 1.4 }); }, wasOpen ? 0 : 560);
+  }
+
+  function closePoint() {
+    document.body.classList.remove('open');
+    $('panel').setAttribute('aria-hidden', 'true');
+    $('tgt-label').textContent = 'TGT';
+    if (activeMarker) activeMarker.getElement()?.firstChild?.classList.remove('active');
+    activeMarker = null;
+    setTimeout(() => { map.invalidateSize(); map.flyTo(HOME.center, HOME.zoom, { duration: 1.2 }); }, 560);
+  }
+  $('close').onclick = closePoint;
+
+  // Click an image to see it full size
+  $('p-gallery').addEventListener('click', e => {
+    const fig = e.target.closest('figure[data-src]'); if (!fig) return;
+    $('lb-img').src = fig.dataset.src; $('lb-cap').textContent = fig.dataset.cap; $('lightbox').classList.add('show');
+  });
+  $('lightbox').onclick = () => $('lightbox').classList.remove('show');
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if ($('lightbox').classList.contains('show')) $('lightbox').classList.remove('show');
+    else if (document.body.classList.contains('open')) closePoint();
+  });
+
+  // ---------- Layout preview: open the page with ?demo to see one example point ----------
+  if (new URLSearchParams(location.search).has('demo')) {
+    addPoints({ type: 'FeatureCollection', features: [{
+      type: 'Feature', geometry: { type: 'Point', coordinates: [28.9655, 41.0025] },
+      properties: { id: '00', name: 'Example point (layout preview)', location: 'Placeholder – your text here',
+        vessel: 'Placeholder', material: 'Placeholder', duration: 'Placeholder', images: [] }
+    }]});
+  }
+</script>
+</body>
+</html>
