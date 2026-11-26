@@ -68,15 +68,27 @@
     font-family: "IBM Plex Mono", monospace; font-size: 9px; }
   .leaflet-control-attribution a { color: var(--hud-dim) !important; }
 
-  /* Point markers */
-  .vessel { width: 14px; height: 14px; border: 1.5px solid #fff; transform: rotate(45deg);
-    box-shadow: 0 0 6px #000; cursor: pointer; transition: background .2s; }
-  .vessel:hover, .vessel.active { background: #fff; }
-  .vessel.likely { border-color: #fff; }
-  .vessel.possibly { border-color: rgba(255,255,255,0.7); width: 10px; height: 10px; }
-  .vessel.approx { border-style: dashed; opacity: 0.7; }
-  .legend { position: absolute; left: 26px; bottom: 130px; line-height: 1.7; font-size: 11px; }
+  /* Point markers: small crosshair. Green = likely abandoned, purple = possibly abandoned */
+  :root { --likely: #39e46f; --possibly: #b56cff; }
+  .vessel { display: block; width: 13px; height: 13px; cursor: pointer; overflow: visible;
+    filter: drop-shadow(0 0 1.5px #000) drop-shadow(0 0 1px #000); transition: transform .2s; }
+  .vessel circle, .vessel line { fill: none; stroke: currentColor; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+  .vessel.likely { color: var(--likely); }
+  .vessel.possibly { color: var(--possibly); }
+  .vessel.approx circle { stroke-dasharray: 2 1.6; }
+  .vessel.approx { opacity: 0.8; }
+  .vessel:hover { transform: scale(1.45); }
+  .vessel.active { transform: scale(1.7); filter: drop-shadow(0 0 3px currentColor) drop-shadow(0 0 1px #000); }
+  .legend { position: absolute; left: 26px; bottom: 130px; line-height: 1.9; font-size: 11px; }
   .legend .vessel { display: inline-block; vertical-align: middle; margin-right: 10px; cursor: default; }
+  .legend .vessel:hover { transform: none; }
+
+  /* Leader line from the open point to the side panel */
+  #leader { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 450; overflow: visible; }
+  #leader polyline { fill: none; stroke-width: 1.5; stroke-linejoin: miter;
+    filter: drop-shadow(0 0 2px #000); transition: opacity .25s; }
+  #leader circle { stroke: none; }
+  @media (max-width: 800px) { #leader { display: none; } }
 
   /* Side panel (yellow box) */
   #panel { position: absolute; top: 0; right: 0; bottom: 0; width: var(--panel-w); background: #000;
@@ -131,6 +143,7 @@
 <div id="stage">
   <div id="map"></div>
   <div id="grain"></div>
+  <svg id="leader" aria-hidden="true"><polyline id="leader-line" points="" opacity="0"/><circle id="leader-dot" r="2.5" opacity="0"/></svg>
   <div id="hud">
     <div class="tl"><span id="clock">--:--:--</span>&nbsp;&nbsp;AUTO&nbsp;&nbsp;&nbsp;VIC<br>UTC+3.0&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;MAN</div>
     <div class="tc"><span class="tag">EON</span><br>DL:LL</div>
@@ -141,7 +154,7 @@
     <div class="cross"></div>
     <div class="box inner"><i></i><i></i><i></i><i></i></div>
     <div class="bl">ACFT<br><span id="m-lat">N --°--.---'</span><br><span id="m-lon">E ---°--.---'</span><br><span class="dim">ZOOM <span id="zoom">--</span></span></div>
-    <div class="legend"><span class="vessel likely"></span>LIKELY ABANDONED<br><span class="vessel possibly"></span>POSSIBLY ABANDONED<br><span class="vessel likely approx"></span>POSITION APPROX.<br><span class="dim" id="count"></span></div>
+    <div class="legend"><span id="lg-likely"></span>LIKELY ABANDONED<br><span id="lg-possibly"></span>POSSIBLY ABANDONED<br><span id="lg-approx"></span>POSITION APPROX.<br><span class="dim" id="count"></span></div>
     <div class="tape"><span class="ticks dim">35 ' 00 ' 01 ' 02 ' 03</span><br>↑<br>000°T</div>
     <div class="br"><span id="tgt-label">TGT</span><br><span id="t-lat">N --°--.---'</span><br><span id="t-lon">E ---°--.---'</span><br><span class="dim">SCALE <span id="scale">--</span></span></div>
   </div>
@@ -230,11 +243,14 @@
       notes       free text
       images      [ { "src": "images/01_2010-03.jpg", "caption": "2010-03 raw" }, ... ]
   */
-  const icon = p => {
-    const cls = ['vessel', /^likely/i.test(p.status || '') ? 'likely' : 'possibly', p.approx ? 'approx' : ''].join(' ');
-    const sz = cls.includes('possibly') ? 10 : 14;
-    return L.divIcon({ className: '', html: `<div class="${cls}"></div>`, iconSize: [sz, sz] });
-  };
+  // crosshair symbol: circle with lines through it, extending past the circle
+  const SYMBOL = '<circle cx="0" cy="0" r="3.6"/><line x1="0" y1="-6.5" x2="0" y2="6.5"/><line x1="-6.5" y1="0" x2="6.5" y2="0"/>';
+  const symbol = cls => `<svg class="vessel ${cls}" viewBox="-6.5 -6.5 13 13">${SYMBOL}</svg>`;
+  const kind = p => /^likely/i.test(p.status || '') ? 'likely' : 'possibly';
+  const icon = p => L.divIcon({ className: '', html: symbol(kind(p) + (p.approx ? ' approx' : '')), iconSize: [13, 13], iconAnchor: [6.5, 6.5] });
+  $('lg-likely').outerHTML = symbol('likely');
+  $('lg-possibly').outerHTML = symbol('possibly');
+  $('lg-approx').outerHTML = symbol('likely approx');
   const points = L.layerGroup().addTo(map);
   let activeMarker = null;
 
@@ -245,6 +261,27 @@
     }).addTo(points);
     $('count').textContent = points.getLayers().reduce((n, g) => n + (g.getLayers ? g.getLayers().length : 1), 0) + ' POINTS';
   };
+
+  // ---------- Leader line: point -> up-right at an angle -> horizontal to the panel ----------
+  const LEADER_ANGLE = 62;            // degrees above horizontal for the first segment
+  let activeLatLng = null, activeKind = 'likely';
+  function drawLeader() {
+    const line = $('leader-line'), dot = $('leader-dot');
+    if (!activeLatLng || !document.body.classList.contains('open')) { line.setAttribute('opacity', 0); dot.setAttribute('opacity', 0); return; }
+    const size = map.getSize(), p = map.latLngToContainerPoint(activeLatLng);
+    const col = getComputedStyle(document.documentElement).getPropertyValue('--' + activeKind).trim();
+    const elbowY = Math.max(40, Math.min(p.y - 60, size.y * 0.22));   // height of the horizontal run
+    const rise = p.y - elbowY, run = rise / Math.tan(LEADER_ANGLE * Math.PI / 180);
+    const start = 9;                                                      // start just outside the symbol
+    const sx = p.x + start * Math.cos(LEADER_ANGLE * Math.PI / 180), sy = p.y - start * Math.sin(LEADER_ANGLE * Math.PI / 180);
+    const ex = p.x + run, endX = size.x;                                  // panel edge = right edge of the map stage
+    const visible = p.x > -20 && p.x < size.x && p.y > 0 && p.y < size.y + 20 && ex < endX - 10;
+    line.setAttribute('points', `${sx},${sy} ${ex},${elbowY} ${endX},${elbowY}`);
+    line.setAttribute('stroke', col); dot.setAttribute('fill', col);
+    dot.setAttribute('cx', endX - 2.5); dot.setAttribute('cy', elbowY);
+    line.setAttribute('opacity', visible ? 0.95 : 0); dot.setAttribute('opacity', visible ? 1 : 0);
+  }
+  map.on('move zoom resize', drawLeader);
 
   function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -279,12 +316,13 @@
     if (activeMarker) activeMarker.getElement()?.firstChild?.classList.remove('active');
     activeMarker = marker;
     marker.getElement()?.firstChild?.classList.add('active');
+    activeLatLng = L.latLng(lat, lng); activeKind = kind(p);
 
     const wasOpen = document.body.classList.contains('open');
     document.body.classList.add('open');
     $('panel').setAttribute('aria-hidden', 'false');
     // Let the map finish shrinking into the left area, then fly to the point
-    setTimeout(() => { map.invalidateSize(); map.flyTo([lat, lng], POINT_ZOOM, { duration: 1.4 }); }, wasOpen ? 0 : 560);
+    setTimeout(() => { map.invalidateSize(); map.flyTo([lat, lng], POINT_ZOOM, { duration: 1.4 }); drawLeader(); }, wasOpen ? 0 : 560);
   }
 
   function closePoint() {
@@ -293,6 +331,7 @@
     $('tgt-label').textContent = 'TGT';
     if (activeMarker) activeMarker.getElement()?.firstChild?.classList.remove('active');
     activeMarker = null;
+    activeLatLng = null; drawLeader();
     setTimeout(() => { map.invalidateSize(); map.flyTo(HOME.center, HOME.zoom, { duration: 1.2 }); }, 560);
   }
   $('close').onclick = closePoint;
